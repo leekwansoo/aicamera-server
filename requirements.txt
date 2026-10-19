@@ -1,0 +1,13 @@
+fastapi
+uvicorn
+jinja2
+opencv-python
+python-dotenv
+bs64
+bleach
+tapo
+tensorflow
+torch
+usbx
+websockets
+wsproto

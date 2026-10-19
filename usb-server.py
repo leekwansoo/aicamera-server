@@ -1,0 +1,133 @@
+import cv2
+import base64
+import asyncio
+import datetime
+import random
+import os
+import json
+from dotenv import load_dotenv
+load_dotenv()
+
+CAMERA_RTSP = {
+    "Camera1": os.getenv("CAMERA1_RTSP"),
+    "Camera2": os.getenv("CAMERA2_RTSP"),
+}
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Request
+from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
+from fastapi.staticfiles import StaticFiles
+from fastapi.templating import Jinja2Templates
+from fastapi.staticfiles import StaticFiles
+from fastapi.templating import Jinja2Templates
+from pathlib import Path
+from usb_device import list_usb_devices
+from main import nvr_handler
+
+
+from main import _mjpeg_frames, _webcam_mjpeg, play_video, webcam_stream, get_usb_camera_index, get_usb_camera
+camera = get_usb_camera()
+
+from main import STATE, STATIC_DIR, BASE_DIR, CAMERA_RTSP, get_usb_camera_index
+CAMERA_RTSP = CAMERA_RTSP
+BASE_DIR = BASE_DIR
+UPLOAD_DIR = BASE_DIR / "uploads"
+STATIC_DIR = STATIC_DIR
+STATE = STATE
+
+app = FastAPI()
+templates = Jinja2Templates(directory="templates")
+app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
+
+# Open your USB webcam
+camera_index = get_usb_camera_index()
+camera = cv2.VideoCapture(camera_index)
+
+
+# websocket = None  # Replace with an actual WebSocket instance before
+@app.get("/")
+def index(request: Request):
+    return templates.TemplateResponse(request, "index.html")
+
+@app.get("/webcam_index")
+def get_webcam_index():
+    camera_index = get_usb_camera_index()
+    return {"camera_index": camera_index}
+
+@app.get("/webcam")
+def index(request: Request):
+    return templates.TemplateResponse(request, "webcam-dashboard.html")
+
+
+@app.get("/api/camera/{camera_id}/stream")
+async def api_camera_stream(camera_id: str):
+    """[UPLINK] RTSP -> MJPEG stream for browser <img>"""
+    url = CAMERA_RTSP.get(camera_id)
+    if not url:
+        return JSONResponse({"error": f"Set CAMERA1_RTSP/CAMERA2_RTSP env for {camera_id}"}, status_code=404)
+    try:
+        import cv2  # noqa: F401
+    except ImportError:
+        return JSONResponse({"error": "opencv-python not installed"}, status_code=500)
+    return StreamingResponse(_mjpeg_frames(url), media_type="multipart/x-mixed-replace; boundary=frame")
+
+@app.get("/api/webcam/stream")
+async def api_webcam_stream(webcam: int = 0):
+    """[UPLINK] USB Webcam -> MJPEG stream for browser <img>"""
+    if not camera.isOpened():
+        return JSONResponse({"error": "Webcam not available"}, status_code=404)
+    return StreamingResponse(_webcam_mjpeg(), media_type="multipart/x-mixed-replace; boundary=frame")
+@app.post("/start_recording")
+def start_recording():
+    nvr_handler.start_recording()
+    return {"status": "recording started"}
+
+@app.post("/stop_recording")
+def stop_recording():
+    nvr_handler.stop_recording()
+    return {"status": "recording stopped"}
+
+@app.post("/api/recording/audio")
+async def recording_audio(request: Request):
+    data = await request.body()
+    ok, detail = await asyncio.to_thread(nvr_handler.add_audio, data)
+    if not ok:
+        return JSONResponse({"error": detail}, status_code=400)
+    return {"status": "audio added", "file": detail}
+
+@app.get("/api/status")
+async def api_all_status():
+    """[UPLINK] Terminal -> Server : Get all devices status (Both-way demo)"""
+    # Simulate temp drift
+     
+    return {
+        "timestamp": datetime.datetime.now().isoformat(),
+        "direction": "Terminal -> Server (UPLINK)",
+        "devices": {
+            "Door1": {"status": STATE["Door1"]},
+            "Door2": {"status": STATE["Door2"]},
+            "Camera1": {"online": True, "motion": random.choice([True, False]), "recording": True},
+            "Webcam1": {"online": True, "motion": random.choice([True, False]), "recording": True},
+        }
+    }
+@app.websocket("/ws/bothway")
+async def websocket_bothway(websocket: WebSocket):
+    await websocket.accept()
+    try:
+        while True:
+            data = {
+                "type": "UPLINK",
+                "timestamp": datetime.datetime.now().isoformat(),
+                "Camera1": {"motion": random.choice([True, False])},
+                "Webcam1": {"motion": random.choice([True, False])},
+            }
+            await websocket.send_text(json.dumps(data))
+            await asyncio.sleep(10)
+    except WebSocketDisconnect:
+        pass
+
+@app.websocket("/ws/video")
+async def video_ws(websocket: WebSocket):
+    await webcam_stream(websocket)
+
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run("usb-server:app", host="127.0.0.1", port=8000, reload=True)

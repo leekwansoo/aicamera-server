@@ -1,0 +1,48 @@
+<!DOCTYPE html>
+    <html>
+    <body>
+        <h3>휴대폰 카메라 전송 중...</h3>
+        <video id="video" autoplay playsinline style="width:100%"></video>
+        <button id="startRecording">Start Recording</button>
+        <button id="stopRecording">Stop Recording</button>
+        <script>
+            const video = document.getElementById('video');
+            const ws = new WebSocket(`ws://${location.host}/ws`);
+
+            ws.onopen = async () => {
+                const stream = await navigator.mediaDevices.getUserMedia({ 
+                    video: { facingMode: "environment" }, audio: false 
+                });
+                video.srcObject = stream;
+                
+                const canvas = document.createElement('canvas');
+                const ctx = canvas.getContext('2d');
+
+                setInterval(() => {
+                    canvas.width = video.videoWidth;
+                    canvas.height = video.videoHeight;
+                    ctx.drawImage(video, 0, 0);
+                    // jpeg로 압축해서 전송 (품질 0.6)
+                    const data = canvas.toDataURL('image/jpeg', 0.6);
+                    if (ws.readyState === WebSocket.OPEN) {
+                        ws.send(data);
+                    }
+                }, 100); // 100ms = 10fps, 50으로 하면 20fps
+            };
+            
+            document.getElementById('stopRecording').addEventListener('click', () => {
+                const stream = video.srcObject;
+                const tracks = stream.getTracks();
+                tracks.forEach(track => track.stop());
+                video.srcObject = null;
+            });
+
+            document.getElementById('startRecording').addEventListener('click', async () => {
+                const stream = await navigator.mediaDevices.getUserMedia({ 
+                    video: { facingMode: "environment" }, audio: false 
+                });
+                video.srcObject = stream;
+            });
+        </script>
+    </body>
+    </html>

@@ -1,0 +1,84 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Tapo Stream + Recording</title>
+    <style>
+        body { background: #222; color: #eee; text-align: center; font-family: Arial; }
+        #displayImg { border: 3px solid #555; max-width: 100%; }
+        #recordCanvas { display: none; } /* 녹화용은 숨김 */
+    </style>
+</head>
+<body>
+    <h1>Tapo Camera Stream</h1>
+    <div class="bg-black rounded relative overflow-hidden inline-block">
+        <div class="absolute top-2 left-2 bg-red-600 text-xs px-2 py-1 rounded flex items-center gap-1 z-10">● LIVE Camera1</div>
+        <img id="displayImg" src="/api/camera/Camera1/stream" width="640" height="480" alt="Camera1 live">
+    </div>
+
+    <!-- 녹화는 이 캔버스에서 합니다 -->
+    <canvas id="recordCanvas" width="640" height="480"></canvas>
+
+    <br><br>
+    <button id="startRecording">Start Recording</button>
+    <button id="stopRecording">Stop Recording</button>
+    <span id="recStatus"></span>
+    
+    <script>
+        const img = document.getElementById("displayImg");
+        const canvas = document.getElementById("recordCanvas");
+        const ctx = canvas.getContext("2d");
+        const ws = new WebSocket(`ws://${location.host}/ws/tapo_camera`);
+        // 1. MJPEG <img>가 로드될 때마다 canvas에 복사
+        // img 태그는 초당 30번 바뀌므로 canvas도 30fps 영상이 됨
+        //function drawLoop() {
+           // if (img.complete && img.naturalWidth > 0) {
+           //     ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+           // }
+           // requestAnimationFrame(drawLoop);
+        //}
+        // drawLoop();
+        ws.onmessage = (event) => {
+            const img = new Image();
+            img.src = "data:image/jpeg;base64," + event.data;
+    
+            img.onload = () => {
+                ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+            };
+        };
+    
+        ws.onerror = () => {
+            console.log("WebSocket error, reconnecting...");
+            setTimeout(() => {
+                location.reload();
+            }, 1000);
+        };
+        // 2. canvas를 MediaStream으로 만들어 mp4(webm) 녹화
+        let recorder, chunks = [];
+        document.getElementById("startRecording").onclick = () => {
+            chunks = [];
+            const stream = canvas.captureStream(30); // 30fps로 녹화
+            recorder = new MediaRecorder(stream, { mimeType: 'video/mp4;codecs=vp9' });
+            recorder.ondataavailable = e => { if(e.data.size > 0) chunks.push(e.data); };
+            recorder.onstop = () => {
+                const blob = new Blob(chunks, { type: 'video/mp4' });
+                const a = document.createElement('a');
+                a.href = URL.createObjectURL(blob);
+                a.download = `Camera1_${new Date().toISOString().slice(0,19)}.mp4`;
+                a.click();
+            };
+            recorder.start(100); // 100ms마다 데이터 저장
+            document.getElementById("recStatus").innerText = "● 녹화중...";
+        };
+
+        document.getElementById("stopRecording").onclick = () => {
+            if(recorder && recorder.state !== "inactive") recorder.stop();
+            document.getElementById("recStatus").innerText = "녹화 저장됨";
+        };
+        
+        img.onerror = () => {
+            console.log("스트림 연결 실패, 1초 후 재시도");
+            setTimeout(() => img.src = "/api/camera/Camera1/stream?t=" + Date.now(), 1000);
+        };
+    </script>
+</body>
+</html>

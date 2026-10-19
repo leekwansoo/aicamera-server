@@ -1,0 +1,90 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>WebSocket Webcam Stream</title>
+    <style>
+        body {
+            background: #222;
+            color: #eee;
+            text-align: center;
+            font-family: Arial;
+        }
+        canvas {
+            margin-top: 20px;
+            border: 3px solid #555;
+        }
+    </style>
+</head>
+<body>
+
+    <h1>MP4 WebSocket Player</h1>
+    <input type="file" accept="video/mp4" id="video_file">
+    <button id="playVideo">Play Video</button>
+    <span id="playStatus" style="margin-left: 10px;"></span>
+    <br>
+    <canvas id="videoCanvas" width="640" height="480"></canvas>
+    <div id="soundBarHolder"></div>
+    <br><button id="startRecording">Start Recording</button>
+    <span style="margin: 0 10px;"></span>
+    <button id="stopRecording">Stop Recording</button>
+    <span id="recStatus" style="margin-left: 10px;"></span>
+    <script src="/static/sound_bar.js"></script>
+    <script src="/static/nvr_controls.js"></script>
+    <script>
+    const videoFileInput = document.getElementById("video_file");
+    const playVideoButton = document.getElementById("playVideo");
+    const playStatus = document.getElementById("playStatus");
+    const canvas = document.getElementById("videoCanvas");
+    const ctx = canvas.getContext("2d");
+    let ws = null;
+    const audioPlayer = document.createElement("video");
+    audioPlayer.style.display = "none";
+    document.body.appendChild(audioPlayer);
+
+    // Sound bar under the canvas; also supplies the recordable audio stream.
+    const soundBar = createSoundBar(document.getElementById("soundBarHolder"), audioPlayer);
+    window.getNvrAudioStream = () => soundBar.getRecordStream();
+
+    playVideoButton.addEventListener("click", async () => {
+        const file = videoFileInput.files[0];
+        if (!file) {
+            playStatus.textContent = "Select an mp4 file first";
+            return;
+        }
+        await soundBar.init();
+        if (ws) ws.close();
+        audioPlayer.pause();
+        audioPlayer.src = URL.createObjectURL(file);
+        audioPlayer.load();
+        playStatus.textContent = "Uploading...";
+        try {
+            const res = await fetch("/api/video/upload", { method: "POST", body: file });
+            if (!res.ok) throw new Error("upload failed (" + res.status + ")");
+            const { id } = await res.json();
+
+            const proto = location.protocol === "https:" ? "wss" : "ws";
+            ws = new WebSocket(`${proto}://${location.host}/ws/play/${id}`);
+            let started = false;
+            ws.onopen = () => { playStatus.textContent = "Playing..."; };
+            ws.onmessage = (event) => {
+                if (event.data === "END") {
+                    playStatus.textContent = "Finished";
+                    return;
+                }
+                if (!started) {
+                    started = true;
+                    audioPlayer.currentTime = 0;
+                    audioPlayer.play().catch(() => {});
+                }
+                const img = new Image();
+                img.onload = () => ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+                img.src = "data:image/jpeg;base64," + event.data;
+            };
+            ws.onerror = () => { playStatus.textContent = "WebSocket error"; };
+        } catch (e) {
+            playStatus.textContent = "Error: " + e.message;
+        }
+    });
+</script>
+</body>
+</html>
